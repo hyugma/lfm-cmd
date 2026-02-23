@@ -1,0 +1,15 @@
+{
+    "meta_ctx_size": 8192,
+    "main_ctx_size": 32768,
+    "max_generate_tokens": 32768,
+    "batch_size_limit": 4096,
+    "sample_temp": 0.5,
+    "sample_top_k": 40,
+    "sample_top_p": 0.85,
+    "penalty_repeat": 1.10,
+    "penalty_last_n": 64,
+    "meta_prompt_template": "<|startoftext|><|im_start|>system\nあなたは優秀なプロンプトエンジニアです。<|im_end|>\n<|im_start|>user\n以下のテキスト断片を分析し、元のテキストのジャンル（小説、技術論文、システムログ、議事録など）を判定してください。\nその後、このテキスト全体を最も美しく構造化して要約するための「AIへの指示書（システムプロンプト）」を作成してください。\n出力は150文字以内の「指示書」のみとし、解説や挨拶は一切含めないでください。\n【テキスト断片】\n{TEXT}<|im_end|>\n<|im_start|>assistant\n",
+    "worker_prompt_template": "<|startoftext|><|im_start|>system\n{SYS_PROMPT}\nあなたは入力テキストを要約するAIです。重要なポイントを逃さず、できるだけ簡潔にまとめてください。<|im_end|>\n<|im_start|>user\n以下のテキストを要約してください。\n\n{TEXT}<|im_end|>\n<|im_start|>assistant\n",
+    "intermediate_reduce_prompt": "<|startoftext|><|im_start|>system\n{SYS_PROMPT}<|im_end|>\n<|im_start|>user\n以下のテキスト群を統合・圧縮して、重要なコンテキストを維持した新しい中間要約を生成してください。\n\n{TEXT}<|im_end|>\n<|im_start|>assistant\n",
+    "final_reduce_prompt": "<|startoftext|><|im_start|>system\n{SYS_PROMPT}<|im_end|>\n<|im_start|>user\n以下の内容を統合し、最終的な全体要約を作成してください。\n\n{TEXT}<|im_end|>\n<|im_start|>assistant\n"
+}

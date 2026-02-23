@@ -1,5 +1,6 @@
 mod cli;
 mod types;
+mod config;
 mod prompts;
 mod worker;
 mod reducer;
@@ -15,6 +16,7 @@ use std::sync::Arc;
 use std::thread;
 
 use cli::Args;
+use config::AppConfig;
 use types::ChunkTask;
 use worker::worker_loop;
 use reducer::run_reducer;
@@ -59,6 +61,17 @@ fn main() {
         .expect("Failed to load model from file");
     let model = Arc::new(model);
 
+    // 2.5 Load AppConfig
+    let app_config = if let Some(ref config_path) = args.config {
+        let config_str = fs::read_to_string(config_path)
+            .expect(&format!("Failed to read config file from {:?}", config_path));
+        serde_json::from_str(&config_str)
+            .expect("Failed to parse config file as JSON")
+    } else {
+        AppConfig::default()
+    };
+    let app_config = Arc::new(app_config);
+
     // 3. Set up the queue for workers and reducer
     let (worker_tx, worker_rx) = bounded::<ChunkTask>(args.workers * 2);
     let (reducer_tx, reducer_rx) = bounded::<(usize, String)>(args.workers * 2);
@@ -70,8 +83,9 @@ fn main() {
         let model_clone = model.clone();
         let backend_clone = backend.clone();
         let system_prompt = args.prompt.clone();
+        let config_clone = app_config.clone();
         worker_handles.push(thread::spawn(move || {
-            let outputs = worker_loop(id, model_clone, backend_clone, rx_clone, system_prompt);
+            let outputs = worker_loop(id, model_clone, backend_clone, rx_clone, system_prompt, config_clone);
             for out in outputs {
                 let _ = tx_clone.send(out);
             }
@@ -82,8 +96,9 @@ fn main() {
     let reducer_model = model.clone();
     let reducer_backend = backend.clone();
     let reducer_prompt = args.prompt.clone();
+    let reducer_config = app_config.clone();
     let reducer_handle = thread::spawn(move || {
-        run_reducer(reducer_model, reducer_backend, reducer_prompt, reducer_rx);
+        run_reducer(reducer_model, reducer_backend, reducer_prompt, reducer_rx, reducer_config);
     });
 
     // Drop original receivers

@@ -11,12 +11,14 @@ use std::num::NonZeroU32;
 use std::thread;
 use std::io::{self, Write};
 use crate::prompts::generate_meta_prompt;
+use crate::config::*;
 
 pub fn run_reducer(
     reducer_model: Arc<LlamaModel>,
     reducer_backend: Arc<LlamaBackend>,
     reducer_prompt: String,
     reducer_rx: Receiver<(usize, String)>,
+    config: Arc<AppConfig>,
 ) {
     let mut ordered_chunks = BTreeMap::new();
     let mut next_expected_idx = 0;
@@ -33,9 +35,9 @@ pub fn run_reducer(
     
     // Context configuration for reducing
     let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(NonZeroU32::new(32768).unwrap()))
-        .with_n_batch(4096)
-        .with_n_ubatch(4096);
+        .with_n_ctx(Some(NonZeroU32::new(config.main_ctx_size).unwrap()))
+        .with_n_batch(config.batch_size_limit as u32)
+        .with_n_ubatch(config.batch_size_limit as u32);
     let mut reducer_ctx = reducer_model
         .new_context(reducer_backend.as_ref(), ctx_params)
         .expect("Failed to create reducer context");
@@ -70,8 +72,9 @@ pub fn run_reducer(
                 let m_model = meta_model.clone();
                 let m_backend = meta_backend.clone();
                 let sample = sample_summaries.clone();
+                let m_config = config.clone();
                 thread::spawn(move || {
-                    let prompt = generate_meta_prompt(m_model, m_backend, sample);
+                    let prompt = generate_meta_prompt(m_model, m_backend, sample, m_config);
                     let _ = tx.send(prompt);
                 });
             }
@@ -86,24 +89,22 @@ pub fn run_reducer(
                     if let Some(rx) = &meta_prompt_rx {
                         dynamic_prompt = Some(rx.recv().unwrap_or_else(|_| reducer_prompt.clone()));
                     } else {
-                        dynamic_prompt = Some(generate_meta_prompt(meta_model.clone(), meta_backend.clone(), sample_summaries.clone()));
+                        dynamic_prompt = Some(generate_meta_prompt(meta_model.clone(), meta_backend.clone(), sample_summaries.clone(), config.clone()));
                     }
                     println!("\n[Meta-Prompt Applied]: {}", dynamic_prompt.as_ref().unwrap());
                 }
                 
-                let intermediate_prompt = format!(
-                    "<|startoftext|><|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n以下のテキスト群を統合・圧縮して、重要なコンテキストを維持した新しい中間要約を生成してください。\n\n{}<|im_end|>\n<|im_start|>assistant\n",
-                    dynamic_prompt.as_ref().unwrap(), rolling_buffer
-                );
+                let intermediate_prompt = config.intermediate_reduce_prompt
+                    .replace("{SYS_PROMPT}", dynamic_prompt.as_ref().unwrap())
+                    .replace("{TEXT}", &rolling_buffer);
                 
                 // Execute Reducer Context
                 reducer_ctx.clear_kv_cache();
                 let tokens = reducer_model.str_to_token(&intermediate_prompt, llama_cpp_2::model::AddBos::Always).unwrap();
                 let mut n_eval = 0;
-                let batch_size_limit = 4096;
                 let mut last_batch_tokens = 0;
                 while n_eval < tokens.len() {
-                    let chunk_size = std::cmp::min(tokens.len() - n_eval, batch_size_limit);
+                    let chunk_size = std::cmp::min(tokens.len() - n_eval, config.batch_size_limit);
                     let mut batch = LlamaBatch::new(chunk_size, 1);
                     for i in 0..chunk_size {
                         let token = tokens[n_eval + i].clone();
@@ -121,10 +122,10 @@ pub fn run_reducer(
                 let mut compressed_text = String::new();
                 
                 let mut sampler = LlamaSampler::chain_simple([
-                    LlamaSampler::temp(0.2),
-                    LlamaSampler::top_k(50),
-                    LlamaSampler::top_p(0.9, 1),
-                    LlamaSampler::penalties(32, 1.00, 0.05, 0.05),
+                    LlamaSampler::temp(config.sample_temp),
+                    LlamaSampler::top_k(config.sample_top_k),
+                    LlamaSampler::top_p(config.sample_top_p, 1),
+                    LlamaSampler::penalties(config.penalty_last_n, config.penalty_repeat, 0.05, 0.05),
                     LlamaSampler::dist(1234),
                 ]);
                 // Isolate history: only penalize newly generated tokens, not the input prompt.
@@ -138,7 +139,7 @@ pub fn run_reducer(
                     let new_token_id = candidates_p.selected_token().expect("Failed to sample token");
                     sampler.accept(new_token_id);
                     
-                    if new_token_id == reducer_model.token_eos() || n_cur >= 32768 { break; }
+                    if new_token_id == reducer_model.token_eos() || n_cur >= config.max_generate_tokens { break; }
                     let token_str = crate::types::decode_token(&reducer_model, new_token_id, &mut decoder);
                     compressed_text.push_str(&token_str);
 
@@ -162,23 +163,21 @@ pub fn run_reducer(
              if let Some(rx) = &meta_prompt_rx {
                  dynamic_prompt = Some(rx.recv().unwrap_or_else(|_| reducer_prompt.clone()));
              } else {
-                 dynamic_prompt = Some(generate_meta_prompt(meta_model.clone(), meta_backend.clone(), sample_summaries.clone()));
+                 dynamic_prompt = Some(generate_meta_prompt(meta_model.clone(), meta_backend.clone(), sample_summaries.clone(), config.clone()));
              }
              println!("\n[Meta-Prompt Applied]: {}", dynamic_prompt.as_ref().unwrap());
          }
 
          println!("\n[Final Summary]");
-         let final_prompt = format!(
-            "<|startoftext|><|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n以下の内容を統合し、最終的な全体要約を作成してください。\n\n{}<|im_end|>\n<|im_start|>assistant\n",
-            dynamic_prompt.as_ref().unwrap(), rolling_buffer
-         );
+         let final_prompt = config.final_reduce_prompt
+            .replace("{SYS_PROMPT}", dynamic_prompt.as_ref().unwrap())
+            .replace("{TEXT}", &rolling_buffer);
          reducer_ctx.clear_kv_cache();
          let tokens = reducer_model.str_to_token(&final_prompt, llama_cpp_2::model::AddBos::Always).unwrap();
          let mut n_eval = 0;
-         let batch_size_limit = 4096;
          let mut last_batch_tokens = 0;
          while n_eval < tokens.len() {
-             let chunk_size = std::cmp::min(tokens.len() - n_eval, batch_size_limit);
+             let chunk_size = std::cmp::min(tokens.len() - n_eval, config.batch_size_limit);
              let mut batch = LlamaBatch::new(chunk_size, 1);
              for i in 0..chunk_size {
                  let token = tokens[n_eval + i].clone();
@@ -194,10 +193,10 @@ pub fn run_reducer(
          let mut decoder = encoding_rs::UTF_8.new_decoder();
          
          let mut sampler = LlamaSampler::chain_simple([
-             LlamaSampler::temp(0.2),
-             LlamaSampler::top_k(50),
-             LlamaSampler::top_p(0.9, 1),
-             LlamaSampler::penalties(32, 1.00, 0.05, 0.05),
+             LlamaSampler::temp(config.sample_temp),
+             LlamaSampler::top_k(config.sample_top_k),
+             LlamaSampler::top_p(config.sample_top_p, 1),
+             LlamaSampler::penalties(config.penalty_last_n, config.penalty_repeat, 0.05, 0.05),
              LlamaSampler::dist(1234),
          ]);
          // Isolate history: only penalize newly generated tokens, not the input prompt.
@@ -210,7 +209,7 @@ pub fn run_reducer(
              candidates_p.apply_sampler(&mut sampler);
              let new_token_id = candidates_p.selected_token().expect("Failed to sample token");
              sampler.accept(new_token_id);
-             if new_token_id == reducer_model.token_eos() || n_cur >= 32768 { break; }
+             if new_token_id == reducer_model.token_eos() || n_cur >= config.max_generate_tokens { break; }
              let token_str = crate::types::decode_token(&reducer_model, new_token_id, &mut decoder);
              print!("{}", token_str);
              io::stdout().flush().unwrap();

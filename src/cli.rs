@@ -24,4 +24,8 @@ pub struct Args {
         default_value = "提供されたテキストを解析・要約し3行で出力してください。"
     )]
     pub prompt: String,
+
+    /// Path to advanced JSON configuration file
+    #[arg(short = 'c', long)]
+    pub config: Option<PathBuf>,
 }
