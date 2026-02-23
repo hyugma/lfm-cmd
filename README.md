@@ -41,9 +41,10 @@ lfm-cmd [OPTIONS] -m <MODEL_PATH>
 
 **Options:**
 - `-m, --model <FILE>` : Path to the GGUF model file. If not provided, auto-extracts and loads the embedded LFM2.5 model.
-- `-t, --tokens <COUNT>` : Target maximum tokens per chunk for semantic chunking (Default: `2000`)
-- `-w, --workers <VAL>` : Number of parallel workers/threads for context batching (Default: `4`)
+- `-t, --tokens <COUNT>` : Target maximum tokens per chunk for semantic chunking (Default: `512`)
+- `-w, --workers <VAL>` : Number of parallel workers/threads for context batching (Default: `2`)
 - `-p, --prompt <TEXT>` : Custom system prompt to define the extraction logic.
+- `-c, --config <FILE>` : Path to an advanced JSON configuration file to override hardcoded parameters.
 
 ### Example Pipeline
 
@@ -67,9 +68,21 @@ These options can be tweaked at runtime using flags:
 - `model`: GGUF model path (`-m`, default: embedded model)
 - `prompt`: System prompt (`-p`)
 
-**2. Hardcoded in Source (Requires Recompilation):**
-Core hyperparameters and context constraints are hardcoded in `src/config.rs` to allow the Rust compiler to optimize memory and constant propagation. To change these, you must edit `src/config.rs` and rebuild the program (`cargo build --release`):
-- **Model Context Size:** `META_CTX_SIZE` (8K), `MAIN_CTX_SIZE` (32K)
-- **Generation Limits:** `MAX_GENERATE_TOKENS`, `BATCH_SIZE_LIMIT`
-- **Sampling Parameters:** `SAMPLE_TEMP` (0.2), `SAMPLE_TOP_K` (50), `SAMPLE_TOP_P` (0.9), `PENALTY_REPEAT` (1.00), etc.
-- **Internal Prompts:** The raw structural prompts (`WORKER_PROMPT_TEMPLATE`, `FINAL_REDUCE_PROMPT`, etc.) are also statically defined here.
+**2. Advanced JSON Configuration (`--config`):**
+For deeper control, you can pass a JSON configuration file via `--config configuration.json`. This overrides the application's default hyperparameters, without needing to recompile. Missing fields in your JSON will elegantly fallback to their native default values.
+
+```json
+{
+    "meta_ctx_size": 8192,
+    "main_ctx_size": 32768,
+    "max_generate_tokens": 32768,
+    "batch_size_limit": 4096,
+    "sample_temp": 0.2,
+    "sample_top_k": 50,
+    "sample_top_p": 0.9,
+    "penalty_repeat": 1.00,
+    "penalty_last_n": 32
+}
+```
+
+*Note: You can also override the inner prompt structures (`meta_prompt_template`, `worker_prompt_template`, `intermediate_reduce_prompt`, `final_reduce_prompt`) via this JSON.*
