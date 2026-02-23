@@ -1,4 +1,5 @@
 # lfm-cmd
+[日本語版 README (Japanese)](README_ja.md)
 
 A blazing fast, Apple Silicon (Metal) optimized CLI tool for streaming AI processing. Built entirely in Rust, it statically links and utilizes `llama.cpp`'s Metal backend for maximum parallel throughput and zero-copy performance on macOS M3 chips.
 
